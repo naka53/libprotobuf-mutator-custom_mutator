@@ -8,7 +8,7 @@
 
 // Enabling crossovers is slower (at least 50%) but can increase coverage, and
 // is implemented by https://github.com/P1umer/AFLplusplus-protobuf-mutator
-//#define USE_CROSSOVERS
+#define USE_CROSSOVERS
 
 void debug_printf(const char *format, ...) {
 #ifdef DEBUG
@@ -80,7 +80,7 @@ void mutate(ASN1Mutator *mutator, x509_certificate::SubjectPublicKeyInfo *input,
 
 #ifdef USE_CROSSOVERS
 void crossover(ASN1Mutator *mutator,
-               x509_certificate::X509Certificate *input1, x509_certificate::X509Certificate *input2,
+               x509_certificate::SubjectPublicKeyInfo *input1, x509_certificate::SubjectPublicKeyInfo *input2,
                std::string *output, size_t max_size) {
     // Perform a crossover between two messages
     debug_printf("[mutator] [afl_custom_fuzz] Performing crossover with max size of %d\n", max_size);
@@ -159,12 +159,10 @@ extern "C" size_t afl_custom_fuzz(custom_mutator_t *data,
     bool should_mutate = true;
     if (should_crossover(data, buf, buf_size, add_buf, add_buf_size)) {
         // Create a PDU object from the second protobuf data
-        x509_certificate::X509Certificate input2;
-        debug_printf("[mutator] [afl_custom_fuzz] Converting second raw protobuf to X509Certificate\n");
+        x509_certificate::SubjectPublicKeyInfo input2;
+        debug_printf("[mutator] [afl_custom_fuzz] Converting second raw protobuf to SubjectPublicKeyInfo\n");
         if (unlikely(!input2.ParseFromArray(add_buf, add_buf_size))) {
             debug_printf("[mutator] [afl_custom_fuzz] /!\\ ParseFromArray failed, aborting crossover\n");
-            std::string b64Crossover = base64_encode(add_buf, add_buf_size);
-            printf("afl_custom_fuzz crossover buf: %s\n", b64Crossover.c_str());
         } else {
             // Perform the crossover
             crossover(data->mutator, &input, &input2, &protobuf, max_size);
