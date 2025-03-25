@@ -2,13 +2,12 @@
 #include "x509_certificate_to_der.h"
 
 #include "afl-fuzz.h"
-#include "alloc-inl.h"
 
 #define DEBUG
 
 // Enabling crossovers is slower (at least 50%) but can increase coverage, and
 // is implemented by https://github.com/P1umer/AFLplusplus-protobuf-mutator
-#define USE_CROSSOVERS
+//#define USE_CROSSOVERS
 
 void debug_printf(const char *format, ...) {
 #ifdef DEBUG
@@ -18,12 +17,45 @@ void debug_printf(const char *format, ...) {
 #endif
 }
 
+#define BUF_VAR(type, name) \
+    type * name##_buf;      \
+    size_t name##_size;
+
+#define BUF_PARAM(struct, name) \
+    (void **)&struct->name##_buf, &struct->name##_size
+
 typedef struct custom_mutator_ {
-    void *afl;
+    afl_state_t *afl;
     unsigned int seed;
     size_t max_size = -1;
     ASN1Mutator *mutator;
+
+    BUF_VAR(uint8_t, protobuf_out);
+    BUF_VAR(uint8_t, asn1_out);
 } custom_mutator_t;
+
+#define INITIAL_GROWTH_SIZE (64)
+
+static inline void *maybe_grow(void **buf, size_t *size, size_t size_needed) {
+
+    /* No need to realloc */
+    if (likely(size_needed && *size >= size_needed)) return *buf;
+
+    /* No initial size was set */
+    if (size_needed < INITIAL_GROWTH_SIZE) size_needed = INITIAL_GROWTH_SIZE;
+
+    /* grow exponentially */
+    size_t next_size = next_pow2(size_needed);
+
+    /* handle overflow */
+    if (!next_size) { next_size = size_needed; }
+
+    /* alloc */
+    *buf = realloc(*buf, next_size);
+    *size = *buf ? next_size : 0;
+
+    return *buf;
+}
 
 /**
  * Protobuf helpers
@@ -104,7 +136,7 @@ void crossover(ASN1Mutator *mutator,
  *         There may be multiple instances of this mutator in one afl-fuzz run!
  *         Return NULL on error.
  */
-extern "C" custom_mutator_t *afl_custom_init(void *afl, unsigned int seed) {
+extern "C" custom_mutator_t *afl_custom_init(afl_state_t *afl, unsigned int seed) {
     debug_printf("[mutator] [afl_custom_init] Init ASN1Mutator with seed: %d\n", seed);
 
     custom_mutator_t *data = (custom_mutator_t *)calloc(1, sizeof(custom_mutator_t));
@@ -188,15 +220,16 @@ extern "C" size_t afl_custom_fuzz(custom_mutator_t *data,
 
     // Copy the mutated data into a buffer which remains valid after this
     // function ends and that can be reused in between runs
-    if (unlikely(!afl_realloc((void **)out_buf, protobuf.length()))) {
+    if (unlikely(!maybe_grow(BUF_PARAM(data, protobuf_out), protobuf.length()))) {
         *out_buf = NULL;
-        perror("[mutator] [afl_custom_fuzz] afl_realloc failed");
+        perror("[mutator] [afl_custom_fuzz] maybe_grow failed");
         return 0;
     }
-    memcpy(out_buf, protobuf.c_str(), protobuf.length());
+    memcpy(data->protobuf_out_buf, protobuf.c_str(), protobuf.length());
 
-    debug_printf("[mutator] [afl_custom_fuzz] Generated mutated data %p of size %ld\n", *out_buf, protobuf.length());
+    debug_printf("[mutator] [afl_custom_fuzz] Generated mutated data %p of size %ld\n", data->protobuf_out_buf, protobuf.length());
 
+    *out_buf = data->protobuf_out_buf;
     return protobuf.length();
 }
 
@@ -224,7 +257,6 @@ extern "C" size_t afl_custom_post_process(custom_mutator_t *data, uint8_t *buf,
     // Create a certificate object from the protobuf data
     x509_certificate::SubjectPublicKeyInfo input;
     debug_printf("[mutator] [afl_custom_post_process] Converting raw protobuf to SubjectPublicKeyInfo\n");
-
     if (unlikely(!input.ParseFromArray(buf, buf_size))) {
         printf("[mutator] [afl_custom_post_process] /!\\ ParseFromArray failed\n");
         *out_buf = NULL;
@@ -244,16 +276,17 @@ extern "C" size_t afl_custom_post_process(custom_mutator_t *data, uint8_t *buf,
 
     // Copy the converted data into a buffer which remains valid after this
     // function ends and that can be reused in between runs
-    if (unlikely(!afl_realloc((void **)out_buf, new_size))) {
+    if (unlikely(!maybe_grow(BUF_PARAM(data, asn1_out), new_size))) {
         *out_buf = NULL;
-        perror("[mutator] [afl_custom_post_process] afl_realloc failed");
+        perror("[mutator] [afl_custom_post_process] maybe_grow failed");
         return 0;
     }
-    
-    memcpy(*out_buf, asn1.data(), new_size);
-    
-    debug_printf("[mutator] [afl_custom_post_process] Generated ASN.1 data %p of size %ld\n", *out_buf, new_size);
 
+    memcpy(data->asn1_out_buf, asn1.data(), new_size);
+    
+    debug_printf("[mutator] [afl_custom_post_process] Generated ASN.1 data %p of size %ld\n", data->asn1_out_buf, new_size);
+
+    *out_buf = data->asn1_out_buf;
     return new_size;
 }
 
@@ -265,5 +298,7 @@ extern "C" size_t afl_custom_post_process(custom_mutator_t *data, uint8_t *buf,
 extern "C" void afl_custom_deinit(custom_mutator_t *data) {
     debug_printf("[mutator] [afl_custom_deinit] Cleaning up\n");
     delete data->mutator;
+    free(data->protobuf_out_buf);
+    free(data->asn1_out_buf);
     free(data);
 }
