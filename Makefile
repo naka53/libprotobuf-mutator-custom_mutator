@@ -1,4 +1,3 @@
-TARGET=custom_mutator
 PB_SRC_DIR=$(HOME)/libprotobuf-mutator-asn1/src
 
 CXX=clang++-14
@@ -13,17 +12,20 @@ PROTOBUF_LIB=$(PROTOBUF_DIR)/lib/libprotobufd.a
 LPM_DIR=$(HOME)/libprotobuf-mutator
 LPM_LIB=$(LPM_DIR)/build/src/libprotobuf-mutator.a
 
-INC=-I$(PROTOBUF_DIR)/include -I$(LPM_DIR) -I$(AFL_DIR)/include
+INC=-I$(PROTOBUF_DIR)/include -I$(LPM_DIR) -I$(AFL_DIR)/include -I$(PB_SRC_DIR)
 
-all: $(TARGET).so protobuf_to_der
+all: custom_mutator protobuf_to_der
 
-$(TARGET).so: $(TARGET).cc $(PB_SRC_DIR)/*.cc
+custom_mutator: custom_mutator.cc $(PB_SRC_DIR)/*.cc
 	$(CXX) $(CXXFLAGS) -fPIC -c $^ $(INC)
 	$(CXX) -shared -Wall -O3 -o $@ *.o $(LPM_LIB) $(PROTOBUF_LIB)
 
-protobuf_to_der: protobuf_to_der.cpp
-	$(CXX) -o protobuf_to_der protobuf_to_der.cpp $(PB_SRC_DIR)/*.cc -I$(PB_SRC_DIR) $(INC) $(LPM_LIB) $(PROTOBUF_LIB)
+protobuf_to_der: protobuf_to_der.cc $(PB_SRC_DIR)/*.cc
+	$(CXX) $(CXXFLAGS) -fPIC -c $^ $(INC)
+	$(CXX) -O3 -o $@ *.o $(INC) $(LPM_LIB) $(PROTOBUF_LIB)
 
 .PHONY: clean
 clean: 
-	rm *.so *.o
+	rm *.o
+	rm custom_mutator
+	rm protobuf_to_der
